@@ -82,12 +82,11 @@ impl WorkspaceManager {
                 .map_err(|e| AppError::Workspace(format!("Failed to create workspace dir: {e}")))?;
         }
 
-        // Clone
+        // Clone (shallow, default branch only)
         git::clone(clone_url, &workspace_path, token).await?;
 
-        // Fetch the branch and checkout
-        git::unshallow(&workspace_path).await?;
-        git::checkout(&workspace_path, branch).await?;
+        // Fetch and checkout the specific branch
+        git::fetch_and_checkout(&workspace_path, branch).await?;
 
         Ok(Workspace {
             path: workspace_path,

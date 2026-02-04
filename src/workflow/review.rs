@@ -73,9 +73,18 @@ pub async fn respond_to_review(
         "Please address the code review feedback on PR #{pr_number}. Read the review comments and make the requested changes."
     );
 
-    let outcome = engine.run(&system, &workspace.path, &initial_message).await;
+    // Reviews don't have a cancellation mechanism (PRs stay open), so pass a no-op check
+    let outcome = engine
+        .run(&system, &workspace.path, &initial_message, || async { false })
+        .await;
 
     let result = match outcome {
+        AgentOutcome::Cancelled => {
+            let _ = workspace_mgr.cleanup(&workspace).await;
+            return Ok(WorkflowOutcome::Failed {
+                error: "Cancelled".to_string(),
+            });
+        }
         AgentOutcome::Completed { summary } => {
             let commit_msg = format!("fix: address review feedback on PR #{pr_number}\n\n{summary}");
 

@@ -140,6 +140,23 @@ impl Platform for GitHubPlatform {
         Ok(())
     }
 
+    async fn get_pull_request(
+        &self,
+        installation_id: u64,
+        repo_full_name: &str,
+        pr_number: u64,
+    ) -> Result<PullRequest> {
+        let client = self.installation_client(installation_id).await?;
+        let (owner, repo) = Self::parse_repo(repo_full_name)?;
+
+        let pr = client
+            .pulls(owner, repo)
+            .get(pr_number)
+            .await?;
+
+        Ok(mapper::map_pull_request(pr))
+    }
+
     async fn create_pull_request(
         &self,
         installation_id: u64,

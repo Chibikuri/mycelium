@@ -17,6 +17,8 @@ pub enum AgentOutcome {
     TurnLimitReached { partial_summary: String },
     /// Agent hit Claude API rate limits.
     RateLimited { message: String },
+    /// Agent was cancelled (e.g., issue closed).
+    Cancelled,
     /// Agent encountered an error.
     Failed { error: String },
 }
@@ -41,12 +43,18 @@ impl AgentEngine {
     /// - `system_prompt`: The system prompt with context about the task.
     /// - `workspace_root`: The root directory of the cloned repo.
     /// - `initial_message`: The initial user message to start the conversation.
-    pub async fn run(
+    /// - `is_cancelled`: Async callback checked each turn; returns true if work should stop.
+    pub async fn run<F, Fut>(
         &self,
         system_prompt: &str,
         workspace_root: &Path,
         initial_message: &str,
-    ) -> AgentOutcome {
+        is_cancelled: F,
+    ) -> AgentOutcome
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
         let tool_definitions = self.tools.definitions();
 
         let mut messages = vec![Message {
@@ -58,6 +66,12 @@ impl AgentEngine {
         let mut total_output_tokens = 0u32;
 
         for turn in 0..self.max_turns {
+            // Check for cancellation before each turn
+            if is_cancelled().await {
+                tracing::info!("Agent cancelled");
+                return AgentOutcome::Cancelled;
+            }
+
             tracing::info!(turn = turn, "Agent turn");
 
             let request = MessagesRequest {

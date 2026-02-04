@@ -1,3 +1,12 @@
+/// Whether the agent should implement changes or just research.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueMode {
+    /// Explore the codebase, make changes, and open a PR.
+    Implement,
+    /// Explore the codebase, report findings as a comment. No PR.
+    Research,
+}
+
 /// Tasks that can be enqueued for processing.
 #[derive(Debug, Clone)]
 pub enum Task {
@@ -9,6 +18,7 @@ pub enum Task {
         issue_number: u64,
         issue_title: String,
         issue_body: String,
+        mode: IssueMode,
     },
     RespondToReview {
         installation_id: u64,

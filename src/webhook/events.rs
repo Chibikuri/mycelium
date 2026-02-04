@@ -116,6 +116,8 @@ pub struct RepositoryPayload {
 pub struct UserPayload {
     pub login: String,
     pub id: u64,
+    #[serde(rename = "type", default)]
+    pub user_type: String,
 }
 
 #[derive(Debug, Deserialize)]

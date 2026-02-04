@@ -41,6 +41,25 @@ impl TaskQueue {
         }
     }
 
+    /// Remove all pending tasks for a specific issue from the queue.
+    pub fn cancel_issue(&mut self, repo_full_name: &str, issue_number: u64) {
+        if let Some(queue) = self.queues.get_mut(repo_full_name) {
+            let before = queue.len();
+            queue.retain(|task| {
+                !matches!(task, Task::ResolveIssue { issue_number: n, .. } if *n == issue_number)
+            });
+            let removed = before - queue.len();
+            if removed > 0 {
+                tracing::info!(
+                    repo = repo_full_name,
+                    issue = issue_number,
+                    removed = removed,
+                    "Cancelled queued tasks for closed issue"
+                );
+            }
+        }
+    }
+
     /// Take the next task from any repo that has pending work.
     pub fn take_next(&mut self) -> Option<Task> {
         // Round-robin: find first repo with a task
@@ -101,6 +120,7 @@ pub async fn run_queue_processor(state: Arc<AppState>) {
                     issue_number,
                     issue_title,
                     issue_body,
+                    mode,
                 } => {
                     let result = workflow::issue::resolve_issue(
                         &state,
@@ -111,6 +131,7 @@ pub async fn run_queue_processor(state: Arc<AppState>) {
                         *issue_number,
                         issue_title,
                         issue_body,
+                        *mode,
                     )
                     .await;
 

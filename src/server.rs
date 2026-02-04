@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use axum::{routing::post, Router};
@@ -12,6 +13,8 @@ pub struct AppState {
     pub config: AppConfig,
     pub platform: GitHubPlatform,
     pub task_queue: RwLock<TaskQueue>,
+    /// Set of cancelled issue keys ("owner/repo#123") for in-flight cancellation.
+    pub cancelled: RwLock<HashSet<String>>,
 }
 
 impl AppState {
@@ -23,7 +26,27 @@ impl AppState {
             config,
             platform,
             task_queue,
+            cancelled: RwLock::new(HashSet::new()),
         })
+    }
+
+    /// Mark an issue as cancelled so in-flight agents stop.
+    pub async fn cancel_issue(&self, repo_full_name: &str, issue_number: u64) {
+        let key = format!("{repo_full_name}#{issue_number}");
+        tracing::info!(key = %key, "Cancelling issue");
+        self.cancelled.write().await.insert(key);
+    }
+
+    /// Check if an issue has been cancelled.
+    pub async fn is_cancelled(&self, repo_full_name: &str, issue_number: u64) -> bool {
+        let key = format!("{repo_full_name}#{issue_number}");
+        self.cancelled.read().await.contains(&key)
+    }
+
+    /// Clear cancellation (after the task has been stopped).
+    pub async fn clear_cancellation(&self, repo_full_name: &str, issue_number: u64) {
+        let key = format!("{repo_full_name}#{issue_number}");
+        self.cancelled.write().await.remove(&key);
     }
 }
 

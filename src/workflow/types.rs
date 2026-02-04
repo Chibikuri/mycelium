@@ -5,6 +5,8 @@ pub enum WorkflowOutcome {
     PullRequestCreated { pr_number: u64 },
     /// Successfully pushed fixes in response to review.
     ReviewAddressed,
+    /// Research findings posted as a comment (no PR).
+    ResearchPosted,
     /// Agent needs clarification; comment posted on issue.
     ClarificationRequested,
     /// No changes were needed or produced.

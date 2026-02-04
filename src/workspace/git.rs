@@ -56,6 +56,13 @@ pub async fn unshallow(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Fetch a specific remote branch and check it out.
+pub async fn fetch_and_checkout(dir: &Path, branch_name: &str) -> Result<()> {
+    run_git(dir, &["fetch", "origin", branch_name]).await?;
+    run_git(dir, &["checkout", "-b", branch_name, &format!("origin/{branch_name}")]).await?;
+    Ok(())
+}
+
 /// Create and checkout a new branch.
 pub async fn create_branch(dir: &Path, branch_name: &str) -> Result<()> {
     run_git(dir, &["checkout", "-b", branch_name]).await?;

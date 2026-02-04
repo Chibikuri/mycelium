@@ -54,6 +54,14 @@ pub trait Platform: Send + Sync {
         label: &str,
     ) -> Result<()>;
 
+    /// Fetch a pull request.
+    async fn get_pull_request(
+        &self,
+        installation_id: u64,
+        repo_full_name: &str,
+        pr_number: u64,
+    ) -> Result<PullRequest>;
+
     /// Fetch reviews on a PR.
     async fn get_reviews(
         &self,

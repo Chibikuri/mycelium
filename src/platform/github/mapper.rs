@@ -27,15 +27,7 @@ pub fn map_pull_request(pr: octocrab::models::pulls::PullRequest) -> types::Pull
         number: pr.number,
         title: pr.title.clone().unwrap_or_default(),
         body: pr.body.clone().unwrap_or_default(),
-        head_branch: pr
-            .head
-            .label
-            .clone()
-            .unwrap_or_default(),
-        base_branch: pr
-            .base
-            .label
-            .clone()
-            .unwrap_or_default(),
+        head_branch: pr.head.ref_field.clone(),
+        base_branch: pr.base.ref_field.clone(),
     }
 }

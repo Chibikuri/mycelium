@@ -5,6 +5,7 @@ use crate::agent::tools::ToolRegistry;
 use crate::error::Result;
 use crate::platform::types::CreatePullRequest;
 use crate::platform::Platform;
+use crate::queue::task::IssueMode;
 use crate::server::AppState;
 use crate::workflow::types::WorkflowOutcome;
 use crate::workspace::WorkspaceManager;
@@ -18,9 +19,11 @@ pub async fn resolve_issue(
     issue_number: u64,
     issue_title: &str,
     issue_body: &str,
+    mode: IssueMode,
 ) -> Result<WorkflowOutcome> {
     let platform = &state.platform;
     let config = &state.config;
+    let research_only = mode == IssueMode::Research;
 
     // Add "working" label
     let _ = platform
@@ -72,41 +75,61 @@ pub async fn resolve_issue(
         issue_title,
         issue_body,
         &comments_text,
+        research_only,
     );
 
-    let initial_message = format!(
-        "Please resolve issue #{issue_number}: {issue_title}\n\nStart by exploring the repository structure to understand the codebase."
-    );
+    let initial_message = if research_only {
+        format!(
+            "Please research issue #{issue_number}: {issue_title}\n\nExplore the repository and report your findings. Do not modify any files."
+        )
+    } else {
+        format!(
+            "Please resolve issue #{issue_number}: {issue_title}\n\nStart by exploring the repository structure to understand the codebase. If anything about the issue is unclear, ask for clarification before making changes."
+        )
+    };
 
-    let outcome = engine.run(&system, &workspace.path, &initial_message).await;
+    let repo_name = repo_full_name.to_string();
+    let outcome = engine
+        .run(&system, &workspace.path, &initial_message, || {
+            let state_ref = &state;
+            let repo_ref = &repo_name;
+            async move { state_ref.is_cancelled(repo_ref, issue_number).await }
+        })
+        .await;
+
+    // Clear cancellation flag now that we're done
+    state.clear_cancellation(repo_full_name, issue_number).await;
 
     let result = match outcome {
+        AgentOutcome::Cancelled => {
+            tracing::info!(issue = issue_number, "Task cancelled (issue closed)");
+            let _ = platform
+                .remove_label(
+                    installation_id,
+                    repo_full_name,
+                    issue_number,
+                    &format!("{}:working", config.github.trigger_label),
+                )
+                .await;
+
+            // Cleanup workspace early
+            let _ = workspace_mgr.cleanup(&workspace).await;
+            return Ok(WorkflowOutcome::Failed {
+                error: "Cancelled (issue closed)".to_string(),
+            });
+        }
         AgentOutcome::Completed { summary } => {
-            // Commit and push
-            let commit_msg = format!(
-                "fix: resolve #{issue_number} - {issue_title}\n\n{summary}"
-            );
-
-            let has_changes = workspace_mgr.finalize(&workspace, &commit_msg).await?;
-
-            if has_changes {
-                // Create PR
-                let pr = platform
-                    .create_pull_request(
+            if research_only {
+                // Research mode: post findings as a comment, no PR
+                let _ = platform
+                    .post_comment(
                         installation_id,
                         repo_full_name,
-                        &CreatePullRequest {
-                            title: format!("Fix #{issue_number}: {issue_title}"),
-                            body: format!(
-                                "Resolves #{issue_number}\n\n## Summary\n\n{summary}\n\n---\n*Automated by Mycelium*"
-                            ),
-                            head_branch: workspace.branch.clone(),
-                            base_branch: default_branch.to_string(),
-                        },
+                        issue_number,
+                        &format!("## Research Findings\n\n{summary}\n\n---\n*Mycelium*"),
                     )
-                    .await?;
+                    .await;
 
-                // Update labels
                 let _ = platform
                     .remove_label(
                         installation_id,
@@ -124,25 +147,66 @@ pub async fn resolve_issue(
                     )
                     .await;
 
-                WorkflowOutcome::PullRequestCreated {
-                    pr_number: pr.number,
-                }
+                WorkflowOutcome::ResearchPosted
             } else {
-                // Post a comment explaining no changes were needed
-                let _ = platform
-                    .post_comment(
-                        installation_id,
-                        repo_full_name,
-                        issue_number,
-                        &format!("I analyzed the issue but didn't find any code changes needed.\n\n{summary}\n\n---\n*Mycelium*"),
-                    )
-                    .await;
+                // Implementation mode: commit, push, create PR
+                let commit_msg = format!(
+                    "fix: resolve #{issue_number} - {issue_title}\n\n{summary}"
+                );
 
-                WorkflowOutcome::NoChanges
+                let has_changes = workspace_mgr.finalize(&workspace, &commit_msg).await?;
+
+                if has_changes {
+                    let pr = platform
+                        .create_pull_request(
+                            installation_id,
+                            repo_full_name,
+                            &CreatePullRequest {
+                                title: format!("Fix #{issue_number}: {issue_title}"),
+                                body: format!(
+                                    "Resolves #{issue_number}\n\n## Summary\n\n{summary}\n\n---\n*Automated by Mycelium*"
+                                ),
+                                head_branch: workspace.branch.clone(),
+                                base_branch: default_branch.to_string(),
+                            },
+                        )
+                        .await?;
+
+                    let _ = platform
+                        .remove_label(
+                            installation_id,
+                            repo_full_name,
+                            issue_number,
+                            &format!("{}:working", config.github.trigger_label),
+                        )
+                        .await;
+                    let _ = platform
+                        .add_label(
+                            installation_id,
+                            repo_full_name,
+                            issue_number,
+                            &format!("{}:done", config.github.trigger_label),
+                        )
+                        .await;
+
+                    WorkflowOutcome::PullRequestCreated {
+                        pr_number: pr.number,
+                    }
+                } else {
+                    let _ = platform
+                        .post_comment(
+                            installation_id,
+                            repo_full_name,
+                            issue_number,
+                            &format!("I analyzed the issue but didn't find any code changes needed.\n\n{summary}\n\n---\n*Mycelium*"),
+                        )
+                        .await;
+
+                    WorkflowOutcome::NoChanges
+                }
             }
         }
         AgentOutcome::ClarificationNeeded { question } => {
-            // Post the question as a comment
             let _ = platform
                 .post_comment(
                     installation_id,
@@ -152,7 +216,6 @@ pub async fn resolve_issue(
                 )
                 .await;
 
-            // Update labels
             let _ = platform
                 .remove_label(
                     installation_id,
