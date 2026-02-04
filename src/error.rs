@@ -23,6 +23,9 @@ pub enum AppError {
     #[error("Claude API error: {0}")]
     ClaudeApi(String),
 
+    #[error("Claude API rate limited: {0}")]
+    ClaudeRateLimited(String),
+
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 

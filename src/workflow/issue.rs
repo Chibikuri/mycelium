@@ -187,6 +187,30 @@ pub async fn resolve_issue(
                 error: "Turn limit reached".to_string(),
             }
         }
+        AgentOutcome::RateLimited { message } => {
+            tracing::warn!(issue = issue_number, "Agent hit rate limit");
+            let _ = platform
+                .post_comment(
+                    installation_id,
+                    repo_full_name,
+                    issue_number,
+                    "I hit the Claude API rate limit and had to stop. Please try again later by re-adding the label.\n\n---\n*Mycelium*",
+                )
+                .await;
+
+            let _ = platform
+                .remove_label(
+                    installation_id,
+                    repo_full_name,
+                    issue_number,
+                    &format!("{}:working", config.github.trigger_label),
+                )
+                .await;
+
+            WorkflowOutcome::Failed {
+                error: format!("Rate limited: {message}"),
+            }
+        }
         AgentOutcome::Failed { error } => {
             let _ = platform
                 .post_comment(

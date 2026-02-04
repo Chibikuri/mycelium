@@ -95,7 +95,7 @@ fn default_model() -> String {
 }
 
 fn default_max_tokens() -> u32 {
-    16384
+    8192
 }
 
 fn default_max_turns() -> u32 {

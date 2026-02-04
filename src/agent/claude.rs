@@ -37,6 +37,11 @@ impl ClaudeClient {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                return Err(AppError::ClaudeRateLimited(format!(
+                    "Rate limited (429): {body}"
+                )));
+            }
             return Err(AppError::ClaudeApi(format!(
                 "API returned {status}: {body}"
             )));

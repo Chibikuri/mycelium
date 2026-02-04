@@ -15,6 +15,8 @@ pub enum AgentOutcome {
     ClarificationNeeded { question: String },
     /// Agent hit the turn limit without finishing.
     TurnLimitReached { partial_summary: String },
+    /// Agent hit Claude API rate limits.
+    RateLimited { message: String },
     /// Agent encountered an error.
     Failed { error: String },
 }
@@ -68,6 +70,10 @@ impl AgentEngine {
 
             let response = match self.client.send_message(&request).await {
                 Ok(r) => r,
+                Err(AppError::ClaudeRateLimited(msg)) => {
+                    tracing::warn!("Claude API rate limited, stopping agent");
+                    return AgentOutcome::RateLimited { message: msg };
+                }
                 Err(e) => {
                     return AgentOutcome::Failed {
                         error: format!("Claude API error: {e}"),

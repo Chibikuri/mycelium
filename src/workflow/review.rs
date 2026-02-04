@@ -132,6 +132,21 @@ pub async fn respond_to_review(
                 error: "Turn limit reached".to_string(),
             }
         }
+        AgentOutcome::RateLimited { message } => {
+            tracing::warn!(pr = pr_number, "Agent hit rate limit");
+            let _ = platform
+                .post_comment(
+                    installation_id,
+                    repo_full_name,
+                    pr_number,
+                    "I hit the Claude API rate limit and had to stop. Please try again later.\n\n---\n*Mycelium*",
+                )
+                .await;
+
+            WorkflowOutcome::Failed {
+                error: format!("Rate limited: {message}"),
+            }
+        }
         AgentOutcome::Failed { error } => {
             let _ = platform
                 .post_comment(
