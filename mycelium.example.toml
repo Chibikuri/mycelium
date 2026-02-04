@@ -1,0 +1,27 @@
+[server]
+host = "0.0.0.0"
+port = 3000
+
+[github]
+app_id = 123456
+private_key_path = "/path/to/your-app.private-key.pem"
+webhook_secret = "your-webhook-secret"
+# Label that triggers issue resolution
+trigger_label = "mycelium"
+
+[claude]
+api_key = "sk-ant-..."
+model = "claude-sonnet-4-20250514"
+max_tokens = 16384
+# Maximum number of agentic turns per task
+max_turns = 50
+
+[workspace]
+# Directory where repos will be cloned for processing
+base_dir = "/tmp/mycelium-workspaces"
+
+[agent]
+# Maximum file size the agent can read (bytes)
+max_file_size_bytes = 524288
+# Maximum number of search results returned to the agent
+max_search_results = 50
