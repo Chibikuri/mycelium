@@ -34,6 +34,7 @@ impl Tool for WriteFileTool {
                 },
                 "required": ["path", "content"]
             }),
+            cache_control: None,
         }
     }
 

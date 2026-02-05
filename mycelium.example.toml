@@ -15,6 +15,12 @@ model = "claude-sonnet-4-20250514"
 max_tokens = 16384
 # Maximum number of agentic turns per task
 max_turns = 50
+# Retry with exponential backoff on rate limit (429). Set to false to fail immediately.
+rate_limit_retry = true
+# Maximum number of retries on rate limit before giving up
+rate_limit_max_retries = 5
+# Initial backoff in seconds on rate limit (doubles each retry: 15, 30, 60, 120, 240)
+rate_limit_backoff_secs = 15
 
 [workspace]
 # Directory where repos will be cloned for processing

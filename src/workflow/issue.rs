@@ -1,5 +1,5 @@
 use crate::agent::claude::ClaudeClient;
-use crate::agent::engine::{AgentEngine, AgentOutcome};
+use crate::agent::engine::{AgentEngine, AgentOutcome, RateLimitConfig};
 use crate::agent::prompt;
 use crate::agent::tools::ToolRegistry;
 use crate::error::Result;
@@ -67,7 +67,12 @@ pub async fn resolve_issue(
         config.agent.max_file_size_bytes,
         config.agent.max_search_results,
     );
-    let engine = AgentEngine::new(claude, tools, config.claude.max_turns);
+    let rate_limit = RateLimitConfig {
+        enabled: config.claude.rate_limit_retry,
+        max_retries: config.claude.rate_limit_max_retries,
+        initial_backoff: std::time::Duration::from_secs(config.claude.rate_limit_backoff_secs),
+    };
+    let engine = AgentEngine::new(claude, tools, config.claude.max_turns, rate_limit);
 
     let system = prompt::system_prompt_for_issue(
         repo_full_name,
@@ -84,7 +89,7 @@ pub async fn resolve_issue(
         )
     } else {
         format!(
-            "Please resolve issue #{issue_number}: {issue_title}\n\nStart by exploring the repository structure to understand the codebase. If anything about the issue is unclear, ask for clarification before making changes."
+            "Please resolve issue #{issue_number}: {issue_title}\n\nStart by exploring the repository structure to understand the codebase, then implement the necessary changes."
         )
     };
 

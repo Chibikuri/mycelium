@@ -30,6 +30,7 @@ impl Tool for DeleteFileTool {
                 },
                 "required": ["path"]
             }),
+            cache_control: None,
         }
     }
 

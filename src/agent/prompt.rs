@@ -17,19 +17,16 @@ You are in RESEARCH mode. Your job is to investigate the codebase and report you
         r#"## Mode: Implementation
 You are in IMPLEMENTATION mode. Your job is to make code changes that resolve the issue.
 
-IMPORTANT — Before writing any code, ask yourself:
-- Do I fully understand what the issue is asking for?
-- Is there ambiguity in the requirements that could lead me in the wrong direction?
-- Are there multiple valid approaches where the author's preference matters?
-
-If the answer to any of these is yes, use the ask_clarification tool FIRST.
-It is always better to ask a question than to make incorrect changes.
-
-Once you are confident in the approach:
+Steps:
 1. Explore the codebase to understand the project structure and relevant code.
 2. Plan your changes before making them.
 3. Implement the changes needed to resolve the issue.
-4. Verify your changes make sense by reading the files you modified."#
+4. Verify your changes make sense by reading the files you modified.
+
+Only use the ask_clarification tool if the issue has genuinely contradictory requirements
+or is so vague that you cannot determine what to do at all. Make reasonable assumptions
+and proceed autonomously whenever possible — do not ask about implementation details,
+coding style, or approach preferences."#
     };
 
     format!(
@@ -49,7 +46,7 @@ Your task is to address GitHub issue #{issue_number}.
 
 ## Guidelines
 - Follow the existing code style and patterns in the repository.
-- If anything is unclear or you need more information, use the ask_clarification tool immediately. Do not guess.
+- Be autonomous. Make reasonable decisions on your own based on the codebase context.
 - Be thorough in your exploration before drawing conclusions or making changes.
 
 ## Available Tools
@@ -80,16 +77,16 @@ Your task is to address the code review feedback on PR #{pr_number}.
 
 ## Instructions
 1. Read the review comments carefully.
-2. If any review comment is ambiguous or you're unsure what the reviewer wants, use ask_clarification to ask. Do not guess.
-3. Explore the relevant files to understand the current state.
-4. Make the requested changes.
-5. Verify your changes address each review comment.
+2. Explore the relevant files to understand the current state.
+3. Make the requested changes.
+4. Verify your changes address each review comment.
 
 ## Guidelines
 - Address each review comment specifically.
 - Follow the existing code style.
 - Make minimal changes — only what the reviewer requested.
-- When in doubt, ask for clarification rather than guessing."#,
+- Be autonomous. If a review comment is slightly ambiguous, use your best judgment based on context.
+- Only use ask_clarification if a review comment is genuinely contradictory or impossible to interpret."#,
         review_comments_section = if review_comments.is_empty() {
             String::new()
         } else {

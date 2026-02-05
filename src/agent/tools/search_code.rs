@@ -46,6 +46,7 @@ impl Tool for SearchCodeTool {
                 },
                 "required": ["pattern"]
             }),
+            cache_control: None,
         }
     }
 

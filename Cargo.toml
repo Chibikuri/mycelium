@@ -50,7 +50,7 @@ async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 
 # JWT for GitHub App auth
-jsonwebtoken = "10"
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 
 # Base64
 base64 = "0.22"

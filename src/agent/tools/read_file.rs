@@ -38,6 +38,7 @@ impl Tool for ReadFileTool {
                 },
                 "required": ["path"]
             }),
+            cache_control: None,
         }
     }
 

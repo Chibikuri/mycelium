@@ -50,6 +50,15 @@ pub struct ClaudeConfig {
     pub max_tokens: u32,
     #[serde(default = "default_max_turns")]
     pub max_turns: u32,
+    /// Enable retry with exponential backoff on rate limit (429). Default: true.
+    #[serde(default = "default_rate_limit_retry")]
+    pub rate_limit_retry: bool,
+    /// Max retries on rate limit before giving up. Default: 5.
+    #[serde(default = "default_rate_limit_max_retries")]
+    pub rate_limit_max_retries: u32,
+    /// Initial backoff in seconds on rate limit (doubles each retry). Default: 15.
+    #[serde(default = "default_rate_limit_backoff_secs")]
+    pub rate_limit_backoff_secs: u64,
 }
 
 // Manual Debug impl to avoid leaking the API key
@@ -60,6 +69,9 @@ impl std::fmt::Debug for ClaudeConfig {
             .field("model", &self.model)
             .field("max_tokens", &self.max_tokens)
             .field("max_turns", &self.max_turns)
+            .field("rate_limit_retry", &self.rate_limit_retry)
+            .field("rate_limit_max_retries", &self.rate_limit_max_retries)
+            .field("rate_limit_backoff_secs", &self.rate_limit_backoff_secs)
             .finish()
     }
 }
@@ -95,11 +107,23 @@ fn default_model() -> String {
 }
 
 fn default_max_tokens() -> u32 {
-    8192
+    16384
 }
 
 fn default_max_turns() -> u32 {
     50
+}
+
+fn default_rate_limit_retry() -> bool {
+    true
+}
+
+fn default_rate_limit_max_retries() -> u32 {
+    5
+}
+
+fn default_rate_limit_backoff_secs() -> u64 {
+    15
 }
 
 fn default_workspace_dir() -> PathBuf {

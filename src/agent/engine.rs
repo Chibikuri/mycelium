@@ -1,7 +1,9 @@
 use std::path::Path;
+use std::time::Duration;
 
 use crate::agent::claude::{
-    ClaudeClient, ContentBlock, Message, MessageContent, MessagesRequest,
+    CacheControl, ClaudeClient, ContentBlock, Message, MessageContent, MessagesRequest,
+    SystemContent,
 };
 use crate::agent::tools::{ToolOutput, ToolRegistry};
 use crate::error::{AppError, Result};
@@ -23,18 +25,45 @@ pub enum AgentOutcome {
     Failed { error: String },
 }
 
+/// Rate limit retry configuration.
+pub struct RateLimitConfig {
+    /// Whether to retry on rate limit. If false, fail immediately on 429.
+    pub enabled: bool,
+    /// Maximum number of retries before giving up.
+    pub max_retries: u32,
+    /// Initial backoff duration (doubles each retry).
+    pub initial_backoff: Duration,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_retries: 5,
+            initial_backoff: Duration::from_secs(15),
+        }
+    }
+}
+
 pub struct AgentEngine {
     client: ClaudeClient,
     tools: ToolRegistry,
     max_turns: u32,
+    rate_limit: RateLimitConfig,
 }
 
 impl AgentEngine {
-    pub fn new(client: ClaudeClient, tools: ToolRegistry, max_turns: u32) -> Self {
+    pub fn new(
+        client: ClaudeClient,
+        tools: ToolRegistry,
+        max_turns: u32,
+        rate_limit: RateLimitConfig,
+    ) -> Self {
         Self {
             client,
             tools,
             max_turns,
+            rate_limit,
         }
     }
 
@@ -55,7 +84,15 @@ impl AgentEngine {
         F: Fn() -> Fut,
         Fut: std::future::Future<Output = bool>,
     {
-        let tool_definitions = self.tools.definitions();
+        // Build cached tool definitions — mark the last tool for caching
+        // so the entire system prompt + tools prefix is cached across turns
+        let mut tool_definitions = self.tools.definitions();
+        if let Some(last) = tool_definitions.last_mut() {
+            last.cache_control = Some(CacheControl::ephemeral());
+        }
+
+        // System prompt with cache_control so it's cached across turns
+        let system = vec![SystemContent::cached_text(system_prompt)];
 
         let mut messages = vec![Message {
             role: "user".to_string(),
@@ -64,6 +101,8 @@ impl AgentEngine {
 
         let mut total_input_tokens = 0u32;
         let mut total_output_tokens = 0u32;
+        let mut total_cache_read_tokens = 0u32;
+        let mut total_cache_creation_tokens = 0u32;
 
         for turn in 0..self.max_turns {
             // Check for cancellation before each turn
@@ -77,30 +116,68 @@ impl AgentEngine {
             let request = MessagesRequest {
                 model: self.client.model().to_string(),
                 max_tokens: self.client.max_tokens(),
-                system: system_prompt.to_string(),
+                system: system.clone(),
                 messages: messages.clone(),
                 tools: tool_definitions.clone(),
             };
 
-            let response = match self.client.send_message(&request).await {
-                Ok(r) => r,
-                Err(AppError::ClaudeRateLimited(msg)) => {
-                    tracing::warn!("Claude API rate limited, stopping agent");
-                    return AgentOutcome::RateLimited { message: msg };
-                }
-                Err(e) => {
-                    return AgentOutcome::Failed {
-                        error: format!("Claude API error: {e}"),
-                    };
+            // Send with optional retry-on-rate-limit
+            let response = {
+                let mut retries = 0u32;
+                loop {
+                    match self.client.send_message(&request).await {
+                        Ok(r) => break r,
+                        Err(AppError::ClaudeRateLimited(ref msg)) => {
+                            if !self.rate_limit.enabled
+                                || retries >= self.rate_limit.max_retries
+                            {
+                                if retries > 0 {
+                                    tracing::warn!(
+                                        retries,
+                                        "Rate limited too many times, stopping agent"
+                                    );
+                                } else {
+                                    tracing::warn!("Rate limited, retry disabled");
+                                }
+                                return AgentOutcome::RateLimited {
+                                    message: msg.clone(),
+                                };
+                            }
+                            retries += 1;
+                            let backoff = self.rate_limit.initial_backoff
+                                * 2u32.saturating_pow(retries - 1);
+                            tracing::info!(
+                                retry = retries,
+                                backoff_secs = backoff.as_secs(),
+                                "Rate limited, waiting before retry"
+                            );
+                            tokio::time::sleep(backoff).await;
+
+                            // Check cancellation during backoff
+                            if is_cancelled().await {
+                                tracing::info!("Agent cancelled during rate limit backoff");
+                                return AgentOutcome::Cancelled;
+                            }
+                        }
+                        Err(e) => {
+                            return AgentOutcome::Failed {
+                                error: format!("Claude API error: {e}"),
+                            };
+                        }
+                    }
                 }
             };
 
             total_input_tokens += response.usage.input_tokens;
             total_output_tokens += response.usage.output_tokens;
+            total_cache_read_tokens += response.usage.cache_read_input_tokens.unwrap_or(0);
+            total_cache_creation_tokens += response.usage.cache_creation_input_tokens.unwrap_or(0);
 
             tracing::info!(
                 input_tokens = response.usage.input_tokens,
                 output_tokens = response.usage.output_tokens,
+                cache_read = response.usage.cache_read_input_tokens.unwrap_or(0),
+                cache_creation = response.usage.cache_creation_input_tokens.unwrap_or(0),
                 stop_reason = ?response.stop_reason,
                 "Claude response"
             );
@@ -115,6 +192,8 @@ impl AgentEngine {
                     tracing::info!(
                         total_input_tokens,
                         total_output_tokens,
+                        total_cache_read_tokens,
+                        total_cache_creation_tokens,
                         turns = turn + 1,
                         "Agent completed"
                     );

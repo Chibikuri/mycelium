@@ -29,6 +29,7 @@ impl Tool for AskClarificationTool {
                 },
                 "required": ["question"]
             }),
+            cache_control: None,
         }
     }
 

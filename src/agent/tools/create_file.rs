@@ -34,6 +34,7 @@ impl Tool for CreateFileTool {
                 },
                 "required": ["path", "content"]
             }),
+            cache_control: None,
         }
     }
 

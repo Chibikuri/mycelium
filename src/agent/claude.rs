@@ -15,8 +15,13 @@ pub struct ClaudeClient {
 
 impl ClaudeClient {
     pub fn new(api_key: &str, model: &str, max_tokens: u32) -> Self {
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(300)) // 5 min timeout for long Sonnet responses
+            .build()
+            .expect("Failed to build HTTP client");
+
         Self {
-            client: Client::new(),
+            client,
             api_key: api_key.to_string(),
             model: model.to_string(),
             max_tokens,
@@ -32,7 +37,26 @@ impl ClaudeClient {
             .header("content-type", "application/json")
             .json(request)
             .send()
-            .await?;
+            .await;
+
+        let response = match response {
+            Ok(r) => r,
+            Err(e) => {
+                if e.is_timeout() {
+                    return Err(AppError::ClaudeApi(format!(
+                        "Request timed out (5 min): {e}"
+                    )));
+                }
+                if e.is_connect() {
+                    return Err(AppError::ClaudeApi(format!(
+                        "Connection error: {e}"
+                    )));
+                }
+                return Err(AppError::ClaudeApi(format!(
+                    "HTTP request error: {e:#}"
+                )));
+            }
+        };
 
         let status = response.status();
         if !status.is_success() {
@@ -60,16 +84,53 @@ impl ClaudeClient {
     }
 }
 
+// --- Cache control ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheControl {
+    #[serde(rename = "type")]
+    pub cache_type: String,
+}
+
+impl CacheControl {
+    pub fn ephemeral() -> Self {
+        Self {
+            cache_type: "ephemeral".to_string(),
+        }
+    }
+}
+
 // --- Request types ---
 
 #[derive(Debug, Serialize)]
 pub struct MessagesRequest {
     pub model: String,
     pub max_tokens: u32,
-    pub system: String,
+    pub system: Vec<SystemContent>,
     pub messages: Vec<Message>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolDefinition>,
+}
+
+/// A block in the system prompt array (supports cache_control).
+#[derive(Debug, Clone, Serialize)]
+pub struct SystemContent {
+    #[serde(rename = "type")]
+    pub content_type: String,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<CacheControl>,
+}
+
+impl SystemContent {
+    /// Create a text block with cache_control: ephemeral.
+    pub fn cached_text(text: impl Into<String>) -> Self {
+        Self {
+            content_type: "text".to_string(),
+            text: text.into(),
+            cache_control: Some(CacheControl::ephemeral()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +171,8 @@ pub struct ToolDefinition {
     pub name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<CacheControl>,
 }
 
 // --- Response types ---
@@ -126,4 +189,8 @@ pub struct MessagesResponse {
 pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<u32>,
+    #[serde(default)]
+    pub cache_read_input_tokens: Option<u32>,
 }

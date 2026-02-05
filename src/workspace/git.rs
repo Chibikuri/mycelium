@@ -58,7 +58,9 @@ pub async fn unshallow(dir: &Path) -> Result<()> {
 
 /// Fetch a specific remote branch and check it out.
 pub async fn fetch_and_checkout(dir: &Path, branch_name: &str) -> Result<()> {
-    run_git(dir, &["fetch", "origin", branch_name]).await?;
+    // Fetch the branch and create proper remote tracking ref
+    let refspec = format!("+refs/heads/{branch_name}:refs/remotes/origin/{branch_name}");
+    run_git(dir, &["fetch", "origin", &refspec]).await?;
     run_git(dir, &["checkout", "-b", branch_name, &format!("origin/{branch_name}")]).await?;
     Ok(())
 }

@@ -30,6 +30,7 @@ impl Tool for ListDirectoryTool {
                 },
                 "required": ["path"]
             }),
+            cache_control: None,
         }
     }
 
