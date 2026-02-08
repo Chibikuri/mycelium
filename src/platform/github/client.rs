@@ -98,6 +98,103 @@ impl Platform for GitHubPlatform {
         Ok(token)
     }
 
+    async fn list_installations(&self) -> Result<Vec<Installation>> {
+        let jwt = generate_app_jwt(self.config.app_id, &self.config.private_key_path)?;
+
+        let client = Octocrab::builder()
+            .personal_token(jwt)
+            .build()
+            .map_err(|e| AppError::GitHubApi(format!("Failed to build JWT client: {e}")))?;
+
+        let installations: Vec<serde_json::Value> = client
+            .get("/app/installations", None::<&()>)
+            .await
+            .map_err(|e| AppError::GitHubApi(format!("Failed to list installations: {e}")))?;
+
+        Ok(installations
+            .into_iter()
+            .filter_map(|inst| inst["id"].as_u64().map(|id| Installation { id }))
+            .collect())
+    }
+
+    async fn list_installation_repos(&self, installation_id: u64) -> Result<Vec<InstallationRepo>> {
+        let client = self.installation_client(installation_id).await?;
+
+        let response: serde_json::Value = client
+            .get("/installation/repositories", None::<&()>)
+            .await
+            .map_err(|e| AppError::GitHubApi(format!("Failed to list repos: {e}")))?;
+
+        let repos = response["repositories"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+
+        Ok(repos
+            .into_iter()
+            .filter_map(|repo| {
+                let full_name = repo["full_name"].as_str()?.to_string();
+                let clone_url = repo["clone_url"].as_str()?.to_string();
+                let default_branch = repo["default_branch"]
+                    .as_str()
+                    .unwrap_or("main")
+                    .to_string();
+                Some(InstallationRepo {
+                    full_name,
+                    clone_url,
+                    default_branch,
+                })
+            })
+            .collect())
+    }
+
+    async fn list_open_issues_with_label(
+        &self,
+        installation_id: u64,
+        repo_full_name: &str,
+        label: &str,
+    ) -> Result<Vec<OpenIssue>> {
+        let client = self.installation_client(installation_id).await?;
+        let (owner, repo) = Self::parse_repo(repo_full_name)?;
+
+        // Use the search API to find open issues with the label (excluding PRs)
+        let query = format!("repo:{owner}/{repo} is:issue is:open label:\"{label}\"");
+        let url = format!(
+            "/search/issues?q={}&per_page=100",
+            urlencoding::encode(&query)
+        );
+
+        let response: serde_json::Value = client
+            .get(&url, None::<&()>)
+            .await
+            .map_err(|e| AppError::GitHubApi(format!("Failed to search issues: {e}")))?;
+
+        let items = response["items"].as_array().cloned().unwrap_or_default();
+
+        Ok(items
+            .into_iter()
+            .filter_map(|issue| {
+                let number = issue["number"].as_u64()?;
+                let title = issue["title"].as_str()?.to_string();
+                let body = issue["body"].as_str().unwrap_or("").to_string();
+                let labels = issue["labels"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|l| l["name"].as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(OpenIssue {
+                    number,
+                    title,
+                    body,
+                    labels,
+                })
+            })
+            .collect())
+    }
+
     async fn get_issue(
         &self,
         installation_id: u64,

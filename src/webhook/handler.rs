@@ -5,7 +5,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 
 use crate::queue::task::{IssueMode, Task};
-use crate::server::AppState;
+use crate::server::{AppState, CancellationReason};
 use crate::webhook::events::WebhookEvent;
 use crate::webhook::signature::verify_signature;
 
@@ -79,20 +79,44 @@ async fn handle_issues_event(
     let trigger_label = &state.config.github.trigger_label;
     let research_label = format!("{trigger_label}:research");
 
-    // Handle issue closed or unlabeled — cancel any in-flight work
-    if event.action == "closed" || event.action == "unlabeled" {
-        if event.action == "closed" || event.label.as_ref().map_or(false, |l| {
+    // Handle issue closed — cancel any in-flight work
+    if event.action == "closed" {
+        tracing::info!(
+            repo = %event.repository.full_name,
+            issue = %event.issue.number,
+            "Issue closed, cancelling tasks"
+        );
+        let mut queue = state.task_queue.write().await;
+        queue.cancel_issue(&event.repository.full_name, event.issue.number);
+        state
+            .cancel_issue(
+                &event.repository.full_name,
+                event.issue.number,
+                CancellationReason::IssueClosed,
+            )
+            .await;
+        return StatusCode::OK;
+    }
+
+    // Handle label removed — cancel in-flight work (but issue is still open)
+    if event.action == "unlabeled" {
+        if event.label.as_ref().map_or(false, |l| {
             l.name == *trigger_label || l.name == research_label
         }) {
             tracing::info!(
                 repo = %event.repository.full_name,
                 issue = %event.issue.number,
-                action = %event.action,
-                "Issue closed or unlabeled, cancelling tasks"
+                "Trigger label removed, cancelling tasks"
             );
             let mut queue = state.task_queue.write().await;
             queue.cancel_issue(&event.repository.full_name, event.issue.number);
-            state.cancel_issue(&event.repository.full_name, event.issue.number).await;
+            state
+                .cancel_issue(
+                    &event.repository.full_name,
+                    event.issue.number,
+                    CancellationReason::LabelRemoved,
+                )
+                .await;
         }
         return StatusCode::OK;
     }

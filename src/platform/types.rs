@@ -1,5 +1,28 @@
 use serde::{Deserialize, Serialize};
 
+/// An installation of the GitHub App.
+#[derive(Debug, Clone)]
+pub struct Installation {
+    pub id: u64,
+}
+
+/// A repository accessible via an installation.
+#[derive(Debug, Clone)]
+pub struct InstallationRepo {
+    pub full_name: String,
+    pub clone_url: String,
+    pub default_branch: String,
+}
+
+/// Summary of an open issue (for startup scanning).
+#[derive(Debug, Clone)]
+pub struct OpenIssue {
+    pub number: u64,
+    pub title: String,
+    pub body: String,
+    pub labels: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoInfo {
     pub full_name: String,

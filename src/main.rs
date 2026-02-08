@@ -5,6 +5,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 
 use mycelium::config::AppConfig;
 use mycelium::server::{create_router, AppState};
+use mycelium::shutdown::{graceful_shutdown, wait_for_shutdown};
 
 #[derive(Parser)]
 #[command(name = "mycelium", about = "AI-powered GitHub issue resolver")]
@@ -40,7 +41,13 @@ async fn main() -> anyhow::Result<()> {
         mycelium::queue::run_queue_processor(queue_state).await;
     });
 
-    let app = create_router(state);
+    // Scan for pending issues with trigger labels (resume after restart)
+    let scan_state = Arc::clone(&state);
+    tokio::spawn(async move {
+        mycelium::queue::startup::scan_pending_issues(&scan_state).await;
+    });
+
+    let app = create_router(Arc::clone(&state));
 
     let listener = tokio::net::TcpListener::bind(format!(
         "{}:{}",
@@ -50,7 +57,13 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Listening on {}", listener.local_addr()?);
 
-    axum::serve(listener, app).await?;
+    // Run server with graceful shutdown
+    axum::serve(listener, app)
+        .with_graceful_shutdown(wait_for_shutdown())
+        .await?;
+
+    // Perform graceful shutdown cleanup
+    graceful_shutdown(&state).await;
 
     Ok(())
 }

@@ -54,3 +54,6 @@ jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 
 # Base64
 base64 = "0.22"
+
+# URL encoding
+urlencoding = "2"

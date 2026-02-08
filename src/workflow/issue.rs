@@ -6,7 +6,7 @@ use crate::error::Result;
 use crate::platform::types::CreatePullRequest;
 use crate::platform::Platform;
 use crate::queue::task::IssueMode;
-use crate::server::AppState;
+use crate::server::{AppState, CancellationReason};
 use crate::workflow::types::WorkflowOutcome;
 use crate::workspace::WorkspaceManager;
 
@@ -25,7 +25,7 @@ pub async fn resolve_issue(
     let config = &state.config;
     let research_only = mode == IssueMode::Research;
 
-    // Add "working" label
+    // Add "working" label and register as in-flight
     let _ = platform
         .add_label(
             installation_id,
@@ -33,6 +33,9 @@ pub async fn resolve_issue(
             issue_number,
             &format!("{}:working", config.github.trigger_label),
         )
+        .await;
+    state
+        .register_in_flight(installation_id, repo_full_name, issue_number)
         .await;
 
     // Fetch full issue with comments
@@ -107,7 +110,11 @@ pub async fn resolve_issue(
 
     let result = match outcome {
         AgentOutcome::Cancelled => {
-            tracing::info!(issue = issue_number, "Task cancelled (issue closed)");
+            // Check the cancellation reason to provide appropriate feedback
+            let reason = state
+                .get_cancellation_reason(repo_full_name, issue_number)
+                .await;
+
             let _ = platform
                 .remove_label(
                     installation_id,
@@ -117,10 +124,40 @@ pub async fn resolve_issue(
                 )
                 .await;
 
-            // Cleanup workspace early
+            match reason {
+                Some(CancellationReason::IssueClosed) => {
+                    tracing::info!(issue = issue_number, "Task cancelled (issue closed)");
+                    // No comment needed - issue is closed
+                }
+                Some(CancellationReason::LabelRemoved) => {
+                    tracing::info!(issue = issue_number, "Task cancelled (label removed)");
+                    let _ = platform
+                        .post_comment(
+                            installation_id,
+                            repo_full_name,
+                            issue_number,
+                            "Task stopped because the trigger label was removed. Re-add the label to restart.\n\n---\n*Mycelium*",
+                        )
+                        .await;
+                }
+                None => {
+                    tracing::info!(issue = issue_number, "Task cancelled (unknown reason)");
+                }
+            }
+
+            // Unregister from in-flight tracking and cleanup workspace
+            state
+                .unregister_in_flight(repo_full_name, issue_number)
+                .await;
             let _ = workspace_mgr.cleanup(&workspace).await;
+
+            let error_msg = match reason {
+                Some(CancellationReason::IssueClosed) => "Cancelled (issue closed)",
+                Some(CancellationReason::LabelRemoved) => "Cancelled (label removed)",
+                None => "Cancelled",
+            };
             return Ok(WorkflowOutcome::Failed {
-                error: "Cancelled (issue closed)".to_string(),
+                error: error_msg.to_string(),
             });
         }
         AgentOutcome::Completed { summary } => {
@@ -302,7 +339,10 @@ pub async fn resolve_issue(
         }
     };
 
-    // Cleanup workspace
+    // Unregister from in-flight tracking and cleanup workspace
+    state
+        .unregister_in_flight(repo_full_name, issue_number)
+        .await;
     let _ = workspace_mgr.cleanup(&workspace).await;
 
     Ok(result)

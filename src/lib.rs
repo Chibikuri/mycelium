@@ -4,6 +4,7 @@ pub mod error;
 pub mod platform;
 pub mod queue;
 pub mod server;
+pub mod shutdown;
 pub mod webhook;
 pub mod workflow;
 pub mod workspace;
