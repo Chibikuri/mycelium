@@ -93,7 +93,8 @@ pub async fn respond_to_review(
         AgentOutcome::Completed { summary } => {
             let commit_msg = format!("fix: address review feedback on PR #{pr_number}\n\n{summary}");
 
-            let has_changes = workspace_mgr.finalize(&workspace, &commit_msg).await?;
+            let token = platform.get_access_token(installation_id).await?;
+            let has_changes = workspace_mgr.finalize(&workspace, &commit_msg, &token).await?;
 
             if has_changes {
                 // Post a comment on the PR

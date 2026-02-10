@@ -1,146 +1,313 @@
 use std::path::Path;
-use std::process::Stdio;
+
+use git2::{
+    build::RepoBuilder, Cred, FetchOptions, IndexAddOption, PushOptions, RemoteCallbacks,
+    Repository, Signature,
+};
 
 use crate::error::{AppError, Result};
 
-/// Run a git command in the specified directory and return stdout.
-async fn run_git(dir: &Path, args: &[&str]) -> Result<String> {
-    let output = tokio::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| AppError::Git(format!("Failed to run git: {e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+/// Validate a branch name to prevent argument injection.
+/// Rejects names starting with `-` as defence in depth.
+fn validate_branch_name(name: &str) -> Result<()> {
+    if name.starts_with('-') {
         return Err(AppError::Git(format!(
-            "git {} failed: {stderr}",
-            args.join(" ")
+            "Invalid branch name (starts with '-'): {name}"
         )));
     }
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
-/// Clone a repository into the target directory.
-pub async fn clone(url: &str, target: &Path, token: &str) -> Result<()> {
-    // Insert token into the clone URL for authentication
-    let authed_url = inject_token(url, token)?;
-
-    let output = tokio::process::Command::new("git")
-        .args(["clone", "--depth=1", &authed_url])
-        .arg(target)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| AppError::Git(format!("Failed to run git clone: {e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // Redact the token from error messages
-        let safe_stderr = stderr.replace(token, "***");
-        return Err(AppError::Git(format!("git clone failed: {safe_stderr}")));
-    }
-
     Ok(())
 }
 
+/// Build `FetchOptions` that authenticate via credential callback.
+/// The token is captured by the closure and never written to disk.
+fn make_fetch_options(token: &str) -> FetchOptions<'_> {
+    let mut callbacks = RemoteCallbacks::new();
+    callbacks.credentials(move |_url, _username_from_url, _allowed_types| {
+        Cred::userpass_plaintext("x-access-token", token)
+    });
+    let mut opts = FetchOptions::new();
+    opts.remote_callbacks(callbacks);
+    opts
+}
+
+/// Build `PushOptions` that authenticate via credential callback.
+fn make_push_options(token: &str) -> PushOptions<'_> {
+    let mut callbacks = RemoteCallbacks::new();
+    callbacks.credentials(move |_url, _username_from_url, _allowed_types| {
+        Cred::userpass_plaintext("x-access-token", token)
+    });
+    let mut opts = PushOptions::new();
+    opts.remote_callbacks(callbacks);
+    opts
+}
+
+/// Clone a repository into the target directory.
+///
+/// The remote URL stored in `.git/config` will be the **plain** URL
+/// (no credentials). Authentication is handled via credential callback only.
+pub async fn clone(url: &str, target: &Path, token: &str) -> Result<()> {
+    if !url.starts_with("https://") {
+        return Err(AppError::Git(format!(
+            "Expected HTTPS clone URL, got: {url}"
+        )));
+    }
+
+    let url = url.to_string();
+    let target = target.to_path_buf();
+    let token = token.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        let fetch_opts = make_fetch_options(&token);
+        RepoBuilder::new()
+            .fetch_options(fetch_opts)
+            .clone(&url, &target)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Git(format!("Clone task panicked: {e}")))?
+}
+
 /// Fetch the full history for a shallow clone (needed for some operations).
-pub async fn unshallow(dir: &Path) -> Result<()> {
+pub async fn unshallow(dir: &Path, token: &str) -> Result<()> {
+    let dir = dir.to_path_buf();
+    let token = token.to_string();
+
     // This may fail if already unshallowed, which is fine
-    let _ = run_git(dir, &["fetch", "--unshallow"]).await;
+    let _ = tokio::task::spawn_blocking(move || -> Result<()> {
+        let repo = Repository::open(&dir)?;
+        let mut remote = repo.find_remote("origin")?;
+        let mut fetch_opts = make_fetch_options(&token);
+        remote.fetch(
+            &["refs/heads/*:refs/remotes/origin/*"],
+            Some(&mut fetch_opts),
+            None,
+        )?;
+        Ok(())
+    })
+    .await;
+
     Ok(())
 }
 
 /// Fetch a specific remote branch and check it out.
-pub async fn fetch_and_checkout(dir: &Path, branch_name: &str) -> Result<()> {
-    // Fetch the branch and create proper remote tracking ref
-    let refspec = format!("+refs/heads/{branch_name}:refs/remotes/origin/{branch_name}");
-    run_git(dir, &["fetch", "origin", &refspec]).await?;
-    run_git(dir, &["checkout", "-b", branch_name, &format!("origin/{branch_name}")]).await?;
-    Ok(())
+pub async fn fetch_and_checkout(dir: &Path, branch_name: &str, token: &str) -> Result<()> {
+    validate_branch_name(branch_name)?;
+
+    let dir = dir.to_path_buf();
+    let branch_name = branch_name.to_string();
+    let token = token.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        let repo = Repository::open(&dir)?;
+        let mut remote = repo.find_remote("origin")?;
+
+        // Fetch the specific branch
+        let refspec = format!(
+            "+refs/heads/{branch_name}:refs/remotes/origin/{branch_name}"
+        );
+        let mut fetch_opts = make_fetch_options(&token);
+        remote.fetch(&[&refspec], Some(&mut fetch_opts), None)?;
+
+        // Find the fetched commit
+        let remote_ref = format!("refs/remotes/origin/{branch_name}");
+        let reference = repo.find_reference(&remote_ref)?;
+        let commit = reference.peel_to_commit()?;
+
+        // Create a local branch pointing at that commit
+        repo.branch(&branch_name, &commit, false)?;
+
+        // Checkout the branch
+        let obj = repo.revparse_single(&format!("refs/heads/{branch_name}"))?;
+        repo.checkout_tree(&obj, None)?;
+        repo.set_head(&format!("refs/heads/{branch_name}"))?;
+
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Git(format!("Fetch-and-checkout task panicked: {e}")))?
 }
 
 /// Create and checkout a new branch.
 pub async fn create_branch(dir: &Path, branch_name: &str) -> Result<()> {
-    run_git(dir, &["checkout", "-b", branch_name]).await?;
-    Ok(())
+    validate_branch_name(branch_name)?;
+
+    let dir = dir.to_path_buf();
+    let branch_name = branch_name.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        let repo = Repository::open(&dir)?;
+        let head = repo.head()?;
+        let commit = head.peel_to_commit()?;
+        repo.branch(&branch_name, &commit, false)?;
+        let obj = repo.revparse_single(&format!("refs/heads/{branch_name}"))?;
+        repo.checkout_tree(&obj, None)?;
+        repo.set_head(&format!("refs/heads/{branch_name}"))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Git(format!("Create-branch task panicked: {e}")))?
 }
 
 /// Checkout an existing branch.
 pub async fn checkout(dir: &Path, branch_name: &str) -> Result<()> {
-    run_git(dir, &["checkout", branch_name]).await?;
-    Ok(())
+    validate_branch_name(branch_name)?;
+
+    let dir = dir.to_path_buf();
+    let branch_name = branch_name.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        let repo = Repository::open(&dir)?;
+        let obj = repo.revparse_single(&format!("refs/heads/{branch_name}"))?;
+        repo.checkout_tree(&obj, None)?;
+        repo.set_head(&format!("refs/heads/{branch_name}"))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Git(format!("Checkout task panicked: {e}")))?
 }
 
 /// Stage all changes.
 pub async fn add_all(dir: &Path) -> Result<()> {
-    run_git(dir, &["add", "-A"]).await?;
-    Ok(())
+    let dir = dir.to_path_buf();
+
+    tokio::task::spawn_blocking(move || {
+        let repo = Repository::open(&dir)?;
+        let mut index = repo.index()?;
+        index.add_all(["*"].iter(), IndexAddOption::DEFAULT, None)?;
+        index.write()?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Git(format!("Add-all task panicked: {e}")))?
 }
 
 /// Commit with a message.
 pub async fn commit(dir: &Path, message: &str) -> Result<()> {
-    // Configure git user for the commit
-    run_git(dir, &["config", "user.name", "Mycelium Bot"]).await?;
-    run_git(dir, &["config", "user.email", "mycelium[bot]@users.noreply.github.com"]).await?;
+    let dir = dir.to_path_buf();
+    let message = message.to_string();
 
-    run_git(dir, &["commit", "-m", message, "--allow-empty"]).await?;
-    Ok(())
+    tokio::task::spawn_blocking(move || {
+        let repo = Repository::open(&dir)?;
+        let sig = Signature::now("Mycelium Bot", "mycelium[bot]@users.noreply.github.com")?;
+        let mut index = repo.index()?;
+        let tree_oid = index.write_tree()?;
+        let tree = repo.find_tree(tree_oid)?;
+        let head = repo.head()?;
+        let parent = head.peel_to_commit()?;
+        repo.commit(Some("HEAD"), &sig, &sig, &message, &tree, &[&parent])?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Git(format!("Commit task panicked: {e}")))?
 }
 
 /// Push the current branch to origin.
-pub async fn push(dir: &Path, branch_name: &str) -> Result<()> {
-    run_git(dir, &["push", "origin", branch_name]).await?;
-    Ok(())
+pub async fn push(dir: &Path, branch_name: &str, token: &str) -> Result<()> {
+    validate_branch_name(branch_name)?;
+
+    let dir = dir.to_path_buf();
+    let branch_name = branch_name.to_string();
+    let token = token.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        let repo = Repository::open(&dir)?;
+        let mut remote = repo.find_remote("origin")?;
+        let refspec = format!("refs/heads/{branch_name}:refs/heads/{branch_name}");
+        let mut push_opts = make_push_options(&token);
+        remote.push(&[&refspec], Some(&mut push_opts))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Git(format!("Push task panicked: {e}")))?
 }
 
 /// Push with force (for review responses that amend).
-pub async fn force_push(dir: &Path, branch_name: &str) -> Result<()> {
-    run_git(dir, &["push", "--force-with-lease", "origin", branch_name]).await?;
-    Ok(())
+pub async fn force_push(dir: &Path, branch_name: &str, token: &str) -> Result<()> {
+    validate_branch_name(branch_name)?;
+
+    let dir = dir.to_path_buf();
+    let branch_name = branch_name.to_string();
+    let token = token.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        let repo = Repository::open(&dir)?;
+        let mut remote = repo.find_remote("origin")?;
+        let refspec = format!("+refs/heads/{branch_name}:refs/heads/{branch_name}");
+        let mut push_opts = make_push_options(&token);
+        remote.push(&[&refspec], Some(&mut push_opts))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Git(format!("Force-push task panicked: {e}")))?
 }
 
 /// Check if there are any staged or unstaged changes.
 pub async fn has_changes(dir: &Path) -> Result<bool> {
-    let status = run_git(dir, &["status", "--porcelain"]).await?;
-    Ok(!status.trim().is_empty())
-}
+    let dir = dir.to_path_buf();
 
-/// Inject an access token into a GitHub HTTPS clone URL.
-fn inject_token(url: &str, token: &str) -> Result<String> {
-    if let Some(rest) = url.strip_prefix("https://") {
-        Ok(format!("https://x-access-token:{token}@{rest}"))
-    } else {
-        Err(AppError::Git(format!(
-            "Expected HTTPS clone URL, got: {url}"
-        )))
-    }
+    tokio::task::spawn_blocking(move || {
+        let repo = Repository::open(&dir)?;
+        let statuses = repo.statuses(None)?;
+        Ok(!statuses.is_empty())
+    })
+    .await
+    .map_err(|e| AppError::Git(format!("Has-changes task panicked: {e}")))?
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
-    fn test_inject_token() {
-        let url = "https://github.com/owner/repo.git";
-        let token = "ghs_abc123";
-        let result = inject_token(url, token).unwrap();
-        assert_eq!(
-            result,
-            "https://x-access-token:ghs_abc123@github.com/owner/repo.git"
-        );
+    fn test_validate_branch_name_rejects_dash_prefix() {
+        assert!(validate_branch_name("-evil").is_err());
+        assert!(validate_branch_name("--upload-pack").is_err());
     }
 
     #[test]
-    fn test_inject_token_non_https() {
-        let url = "git@github.com:owner/repo.git";
-        let token = "ghs_abc123";
-        assert!(inject_token(url, token).is_err());
+    fn test_validate_branch_name_accepts_normal() {
+        assert!(validate_branch_name("main").is_ok());
+        assert!(validate_branch_name("feature/my-branch").is_ok());
+        assert!(validate_branch_name("mycelium/issue-42").is_ok());
+    }
+
+    #[test]
+    fn test_has_changes_empty_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tmp.path()).unwrap();
+
+        // Brand new repo with no files — no changes
+        let statuses = repo.statuses(None).unwrap();
+        assert!(statuses.is_empty());
+    }
+
+    #[test]
+    fn test_has_changes_with_new_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _repo = Repository::init(tmp.path()).unwrap();
+
+        // Create an untracked file
+        fs::write(tmp.path().join("hello.txt"), "world").unwrap();
+
+        let repo = Repository::open(tmp.path()).unwrap();
+        let statuses = repo.statuses(None).unwrap();
+        assert!(!statuses.is_empty());
+    }
+
+    #[test]
+    fn test_clone_rejects_non_https() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = rt.block_on(clone(
+            "git@github.com:owner/repo.git",
+            Path::new("/tmp/test"),
+            "token",
+        ));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Expected HTTPS clone URL"));
     }
 }

@@ -196,7 +196,8 @@ pub async fn resolve_issue(
                     "fix: resolve #{issue_number} - {issue_title}\n\n{summary}"
                 );
 
-                let has_changes = workspace_mgr.finalize(&workspace, &commit_msg).await?;
+                let token = platform.get_access_token(installation_id).await?;
+                let has_changes = workspace_mgr.finalize(&workspace, &commit_msg, &token).await?;
 
                 if has_changes {
                     let pr = platform

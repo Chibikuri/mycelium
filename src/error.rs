@@ -45,4 +45,10 @@ impl From<octocrab::Error> for AppError {
     }
 }
 
+impl From<git2::Error> for AppError {
+    fn from(e: git2::Error) -> Self {
+        AppError::Git(e.message().to_string())
+    }
+}
+
 pub type Result<T> = std::result::Result<T, AppError>;

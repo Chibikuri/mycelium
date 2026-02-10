@@ -86,7 +86,7 @@ impl WorkspaceManager {
         git::clone(clone_url, &workspace_path, token).await?;
 
         // Fetch and checkout the specific branch
-        git::fetch_and_checkout(&workspace_path, branch).await?;
+        git::fetch_and_checkout(&workspace_path, branch, token).await?;
 
         Ok(Workspace {
             path: workspace_path,
@@ -99,6 +99,7 @@ impl WorkspaceManager {
         &self,
         workspace: &Workspace,
         commit_message: &str,
+        token: &str,
     ) -> Result<bool> {
         if !git::has_changes(&workspace.path).await? {
             tracing::info!("No changes to commit");
@@ -107,7 +108,7 @@ impl WorkspaceManager {
 
         git::add_all(&workspace.path).await?;
         git::commit(&workspace.path, commit_message).await?;
-        git::push(&workspace.path, &workspace.branch).await?;
+        git::push(&workspace.path, &workspace.branch, token).await?;
 
         Ok(true)
     }

@@ -57,3 +57,9 @@ base64 = "0.22"
 
 # URL encoding
 urlencoding = "2"
+
+# Git operations (in-process, no CLI dependency)
+git2 = "0.20"
+
+[dev-dependencies]
+tempfile = "3"
