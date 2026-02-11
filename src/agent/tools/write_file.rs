@@ -4,9 +4,8 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use crate::agent::claude::ToolDefinition;
-use crate::agent::tools::{Tool, ToolOutput};
+use crate::agent::tools::{require_param, verified_path, Tool, ToolOutput};
 use crate::error::Result;
-use crate::workspace::manager::WorkspaceManager;
 
 pub struct WriteFileTool;
 
@@ -43,19 +42,12 @@ impl Tool for WriteFileTool {
         workspace_root: &Path,
         input: serde_json::Value,
     ) -> Result<ToolOutput> {
-        let path_str = match input["path"].as_str() {
-            Some(p) => p,
-            None => return Ok(ToolOutput::Error("Missing 'path' parameter".to_string())),
-        };
+        let path_str = require_param!(input, "path");
+        let content = require_param!(input, "content");
 
-        let content = match input["content"].as_str() {
-            Some(c) => c,
-            None => return Ok(ToolOutput::Error("Missing 'content' parameter".to_string())),
-        };
-
-        let full_path = match WorkspaceManager::verify_path(workspace_root, Path::new(path_str)) {
+        let full_path = match verified_path(workspace_root, path_str) {
             Ok(p) => p,
-            Err(e) => return Ok(ToolOutput::Error(format!("Invalid path: {e}"))),
+            Err(e) => return Ok(e),
         };
 
         if !full_path.exists() {

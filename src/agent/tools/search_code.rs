@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use crate::agent::claude::ToolDefinition;
-use crate::agent::tools::{Tool, ToolOutput};
+use crate::agent::tools::{require_param, Tool, ToolOutput};
 use crate::error::Result;
 
 pub struct SearchCodeTool {
@@ -55,10 +55,7 @@ impl Tool for SearchCodeTool {
         workspace_root: &Path,
         input: serde_json::Value,
     ) -> Result<ToolOutput> {
-        let pattern = match input["pattern"].as_str() {
-            Some(p) => p,
-            None => return Ok(ToolOutput::Error("Missing 'pattern' parameter".to_string())),
-        };
+        let pattern = require_param!(input, "pattern");
 
         let search_dir = if let Some(path) = input["path"].as_str() {
             workspace_root.join(path)

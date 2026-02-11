@@ -1,7 +1,5 @@
-use crate::agent::claude::ClaudeClient;
-use crate::agent::engine::{AgentEngine, AgentOutcome, RateLimitConfig};
+use crate::agent::engine::{AgentEngine, AgentOutcome};
 use crate::agent::prompt;
-use crate::agent::tools::ToolRegistry;
 use crate::error::Result;
 use crate::platform::types::CreatePullRequest;
 use crate::platform::Platform;
@@ -10,17 +8,30 @@ use crate::server::{AppState, CancellationReason};
 use crate::workflow::types::WorkflowOutcome;
 use crate::workspace::WorkspaceManager;
 
-pub async fn resolve_issue(
-    state: &AppState,
-    installation_id: u64,
-    repo_full_name: &str,
-    clone_url: &str,
-    default_branch: &str,
-    issue_number: u64,
-    issue_title: &str,
-    issue_body: &str,
-    mode: IssueMode,
-) -> Result<WorkflowOutcome> {
+pub struct IssueContext<'a> {
+    pub state: &'a AppState,
+    pub installation_id: u64,
+    pub repo_full_name: &'a str,
+    pub clone_url: &'a str,
+    pub default_branch: &'a str,
+    pub issue_number: u64,
+    pub issue_title: &'a str,
+    pub issue_body: &'a str,
+    pub mode: IssueMode,
+}
+
+pub async fn resolve_issue(ctx: IssueContext<'_>) -> Result<WorkflowOutcome> {
+    let IssueContext {
+        state,
+        installation_id,
+        repo_full_name,
+        clone_url,
+        default_branch,
+        issue_number,
+        issue_title,
+        issue_body,
+        mode,
+    } = ctx;
     let platform = &state.platform;
     let config = &state.config;
     let research_only = mode == IssueMode::Research;
@@ -61,21 +72,7 @@ pub async fn resolve_issue(
         .await?;
 
     // Run the agent
-    let claude = ClaudeClient::new(
-        config.claude_api_key(),
-        &config.claude.model,
-        config.claude.max_tokens,
-    );
-    let tools = ToolRegistry::new(
-        config.agent.max_file_size_bytes,
-        config.agent.max_search_results,
-    );
-    let rate_limit = RateLimitConfig {
-        enabled: config.claude.rate_limit_retry,
-        max_retries: config.claude.rate_limit_max_retries,
-        initial_backoff: std::time::Duration::from_secs(config.claude.rate_limit_backoff_secs),
-    };
-    let engine = AgentEngine::new(claude, tools, config.claude.max_turns, rate_limit);
+    let engine = AgentEngine::from_config(config);
 
     let system = prompt::system_prompt_for_issue(
         repo_full_name,

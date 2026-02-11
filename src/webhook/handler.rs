@@ -100,7 +100,7 @@ async fn handle_issues_event(
 
     // Handle label removed — cancel in-flight work (but issue is still open)
     if event.action == "unlabeled" {
-        if event.label.as_ref().map_or(false, |l| {
+        if event.label.as_ref().is_some_and(|l| {
             l.name == *trigger_label || l.name == research_label
         }) {
             tracing::info!(

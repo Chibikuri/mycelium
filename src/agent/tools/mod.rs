@@ -13,6 +13,26 @@ use async_trait::async_trait;
 use crate::agent::claude::ToolDefinition;
 use crate::error::Result;
 
+/// Extract a required string param from tool input, or early-return a `ToolOutput::Error`.
+macro_rules! require_param {
+    ($input:expr, $key:expr) => {
+        match $input[$key].as_str() {
+            Some(v) => v,
+            None => return Ok(ToolOutput::Error(format!("Missing '{}' parameter", $key))),
+        }
+    };
+}
+pub(crate) use require_param;
+
+/// Verify a path is inside the workspace, or early-return a `ToolOutput::Error`.
+pub fn verified_path(
+    workspace_root: &Path,
+    path_str: &str,
+) -> std::result::Result<std::path::PathBuf, ToolOutput> {
+    crate::workspace::manager::WorkspaceManager::verify_path(workspace_root, Path::new(path_str))
+        .map_err(|e| ToolOutput::Error(format!("Invalid path: {e}")))
+}
+
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;

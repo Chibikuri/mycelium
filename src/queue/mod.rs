@@ -18,6 +18,12 @@ pub struct TaskQueue {
     notify: Option<tokio::sync::mpsc::UnboundedSender<()>>,
 }
 
+impl Default for TaskQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskQueue {
     pub fn new() -> Self {
         Self {
@@ -73,7 +79,7 @@ impl TaskQueue {
         if let Some(repo) = repo {
             let task = self.queues.get_mut(&repo).and_then(|q| q.pop_front());
             // Clean up empty queues
-            if self.queues.get(&repo).map_or(false, |q| q.is_empty()) {
+            if self.queues.get(&repo).is_some_and(|q| q.is_empty()) {
                 self.queues.remove(&repo);
             }
             task
@@ -124,15 +130,17 @@ pub async fn run_queue_processor(state: Arc<AppState>) {
                     mode,
                 } => {
                     let result = workflow::issue::resolve_issue(
-                        &state,
-                        *installation_id,
-                        repo_full_name,
-                        clone_url,
-                        default_branch,
-                        *issue_number,
-                        issue_title,
-                        issue_body,
-                        *mode,
+                        workflow::issue::IssueContext {
+                            state: &state,
+                            installation_id: *installation_id,
+                            repo_full_name,
+                            clone_url,
+                            default_branch,
+                            issue_number: *issue_number,
+                            issue_title,
+                            issue_body,
+                            mode: *mode,
+                        },
                     )
                     .await;
 

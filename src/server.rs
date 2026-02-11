@@ -36,6 +36,10 @@ pub struct AppState {
     pub in_flight: RwLock<HashMap<String, InFlightIssue>>,
 }
 
+fn issue_key(repo_full_name: &str, issue_number: u64) -> String {
+    format!("{repo_full_name}#{issue_number}")
+}
+
 impl AppState {
     pub async fn new(config: AppConfig) -> crate::error::Result<Self> {
         let platform = GitHubPlatform::new(&config.github).await?;
@@ -57,7 +61,7 @@ impl AppState {
         issue_number: u64,
         reason: CancellationReason,
     ) {
-        let key = format!("{repo_full_name}#{issue_number}");
+        let key = issue_key(repo_full_name, issue_number);
         tracing::info!(key = %key, reason = ?reason, "Cancelling issue");
         self.cancelled.write().await.insert(key, reason);
     }
@@ -68,19 +72,19 @@ impl AppState {
         repo_full_name: &str,
         issue_number: u64,
     ) -> Option<CancellationReason> {
-        let key = format!("{repo_full_name}#{issue_number}");
+        let key = issue_key(repo_full_name, issue_number);
         self.cancelled.read().await.get(&key).copied()
     }
 
     /// Check if an issue has been cancelled.
     pub async fn is_cancelled(&self, repo_full_name: &str, issue_number: u64) -> bool {
-        let key = format!("{repo_full_name}#{issue_number}");
+        let key = issue_key(repo_full_name, issue_number);
         self.cancelled.read().await.contains_key(&key)
     }
 
     /// Clear cancellation (after the task has been stopped).
     pub async fn clear_cancellation(&self, repo_full_name: &str, issue_number: u64) {
-        let key = format!("{repo_full_name}#{issue_number}");
+        let key = issue_key(repo_full_name, issue_number);
         self.cancelled.write().await.remove(&key);
     }
 
@@ -91,7 +95,7 @@ impl AppState {
         repo_full_name: &str,
         issue_number: u64,
     ) {
-        let key = format!("{repo_full_name}#{issue_number}");
+        let key = issue_key(repo_full_name, issue_number);
         self.in_flight.write().await.insert(
             key,
             InFlightIssue {
@@ -104,7 +108,7 @@ impl AppState {
 
     /// Unregister an issue from in-flight tracking.
     pub async fn unregister_in_flight(&self, repo_full_name: &str, issue_number: u64) {
-        let key = format!("{repo_full_name}#{issue_number}");
+        let key = issue_key(repo_full_name, issue_number);
         self.in_flight.write().await.remove(&key);
     }
 

@@ -11,10 +11,12 @@ use crate::platform::Platform;
 use super::auth::generate_app_jwt;
 use super::mapper;
 
+type TokenCache = std::collections::HashMap<u64, (String, chrono::DateTime<chrono::Utc>)>;
+
 pub struct GitHubPlatform {
     config: GitHubConfig,
     /// Cache of installation tokens: installation_id -> (token, expiry)
-    token_cache: Arc<RwLock<std::collections::HashMap<u64, (String, chrono::DateTime<chrono::Utc>)>>>,
+    token_cache: Arc<RwLock<TokenCache>>,
 }
 
 impl GitHubPlatform {
@@ -29,7 +31,7 @@ impl GitHubPlatform {
 
         Ok(Self {
             config: config.clone(),
-            token_cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            token_cache: Arc::new(RwLock::new(TokenCache::new())),
         })
     }
 

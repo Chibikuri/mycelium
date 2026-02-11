@@ -12,6 +12,12 @@ pub struct PerRepoQueue {
     senders: HashMap<String, mpsc::UnboundedSender<Task>>,
 }
 
+impl Default for PerRepoQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PerRepoQueue {
     pub fn new() -> Self {
         Self {

@@ -6,6 +6,7 @@ use crate::agent::claude::{
     SystemContent,
 };
 use crate::agent::tools::{ToolOutput, ToolRegistry};
+use crate::config::AppConfig;
 use crate::error::{AppError, Result};
 
 /// Outcome of an agent run.
@@ -65,6 +66,24 @@ impl AgentEngine {
             max_turns,
             rate_limit,
         }
+    }
+
+    pub fn from_config(config: &AppConfig) -> Self {
+        let claude = ClaudeClient::new(
+            config.claude_api_key(),
+            &config.claude.model,
+            config.claude.max_tokens,
+        );
+        let tools = ToolRegistry::new(
+            config.agent.max_file_size_bytes,
+            config.agent.max_search_results,
+        );
+        let rate_limit = RateLimitConfig {
+            enabled: config.claude.rate_limit_retry,
+            max_retries: config.claude.rate_limit_max_retries,
+            initial_backoff: Duration::from_secs(config.claude.rate_limit_backoff_secs),
+        };
+        Self::new(claude, tools, config.claude.max_turns, rate_limit)
     }
 
     /// Run the agentic loop.

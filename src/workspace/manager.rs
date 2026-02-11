@@ -22,6 +22,21 @@ impl WorkspaceManager {
         }
     }
 
+    /// Clean up an existing workspace directory and ensure its parent exists.
+    async fn prepare_workspace_dir(path: &Path) -> Result<()> {
+        if path.exists() {
+            tokio::fs::remove_dir_all(path)
+                .await
+                .map_err(|e| AppError::Workspace(format!("Failed to clean workspace: {e}")))?;
+        }
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| AppError::Workspace(format!("Failed to create workspace dir: {e}")))?;
+        }
+        Ok(())
+    }
+
     /// Set up a workspace for a new issue: clone the repo and create a branch.
     pub async fn setup_for_issue(
         &self,
@@ -33,19 +48,7 @@ impl WorkspaceManager {
         let branch = format!("mycelium/issue-{issue_number}");
         let workspace_path = self.workspace_path(repo_full_name, &branch);
 
-        // Clean up any existing workspace
-        if workspace_path.exists() {
-            tokio::fs::remove_dir_all(&workspace_path)
-                .await
-                .map_err(|e| AppError::Workspace(format!("Failed to clean workspace: {e}")))?;
-        }
-
-        // Ensure parent dir exists
-        if let Some(parent) = workspace_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| AppError::Workspace(format!("Failed to create workspace dir: {e}")))?;
-        }
+        Self::prepare_workspace_dir(&workspace_path).await?;
 
         // Clone
         git::clone(clone_url, &workspace_path, token).await?;
@@ -69,18 +72,7 @@ impl WorkspaceManager {
     ) -> Result<Workspace> {
         let workspace_path = self.workspace_path(repo_full_name, branch);
 
-        // Clean up any existing workspace
-        if workspace_path.exists() {
-            tokio::fs::remove_dir_all(&workspace_path)
-                .await
-                .map_err(|e| AppError::Workspace(format!("Failed to clean workspace: {e}")))?;
-        }
-
-        if let Some(parent) = workspace_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| AppError::Workspace(format!("Failed to create workspace dir: {e}")))?;
-        }
+        Self::prepare_workspace_dir(&workspace_path).await?;
 
         // Clone (shallow, default branch only)
         git::clone(clone_url, &workspace_path, token).await?;
