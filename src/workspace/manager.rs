@@ -87,11 +87,16 @@ impl WorkspaceManager {
     }
 
     /// Commit and push changes from the workspace.
+    ///
+    /// When `force` is true the push uses `+refs/…` so it overwrites the remote
+    /// branch even if histories have diverged (needed when re-processing an issue
+    /// whose branch already exists from a previous attempt).
     pub async fn finalize(
         &self,
         workspace: &Workspace,
         commit_message: &str,
         token: &str,
+        force: bool,
     ) -> Result<bool> {
         if !git::has_changes(&workspace.path).await? {
             tracing::info!("No changes to commit");
@@ -100,7 +105,11 @@ impl WorkspaceManager {
 
         git::add_all(&workspace.path).await?;
         git::commit(&workspace.path, commit_message).await?;
-        git::push(&workspace.path, &workspace.branch, token).await?;
+        if force {
+            git::force_push(&workspace.path, &workspace.branch, token).await?;
+        } else {
+            git::push(&workspace.path, &workspace.branch, token).await?;
+        }
 
         Ok(true)
     }

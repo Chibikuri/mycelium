@@ -194,7 +194,7 @@ pub async fn resolve_issue(ctx: IssueContext<'_>) -> Result<WorkflowOutcome> {
                 );
 
                 let token = platform.get_access_token(installation_id).await?;
-                let has_changes = workspace_mgr.finalize(&workspace, &commit_msg, &token).await?;
+                let has_changes = workspace_mgr.finalize(&workspace, &commit_msg, &token, true).await?;
 
                 if has_changes {
                     let pr = platform

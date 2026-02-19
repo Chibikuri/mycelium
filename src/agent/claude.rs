@@ -42,17 +42,8 @@ impl ClaudeClient {
         let response = match response {
             Ok(r) => r,
             Err(e) => {
-                if e.is_timeout() {
-                    return Err(AppError::ClaudeApi(format!(
-                        "Request timed out (5 min): {e}"
-                    )));
-                }
-                if e.is_connect() {
-                    return Err(AppError::ClaudeApi(format!(
-                        "Connection error: {e}"
-                    )));
-                }
-                return Err(AppError::ClaudeApi(format!(
+                // All reqwest send errors are transient (timeout, connection, DNS, etc.)
+                return Err(AppError::ClaudeTransient(format!(
                     "HTTP request error: {e:#}"
                 )));
             }
@@ -64,6 +55,12 @@ impl ClaudeClient {
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
                 return Err(AppError::ClaudeRateLimited(format!(
                     "Rate limited (429): {body}"
+                )));
+            }
+            // 5xx and 529 (overloaded) are transient
+            if status.is_server_error() || status.as_u16() == 529 {
+                return Err(AppError::ClaudeTransient(format!(
+                    "Server error ({status}): {body}"
                 )));
             }
             return Err(AppError::ClaudeApi(format!(

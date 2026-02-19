@@ -140,41 +140,55 @@ impl AgentEngine {
                 tools: tool_definitions.clone(),
             };
 
-            // Send with optional retry-on-rate-limit
+            // Send with retry on transient errors and rate limits
             let response = {
                 let mut retries = 0u32;
                 loop {
                     match self.client.send_message(&request).await {
                         Ok(r) => break r,
-                        Err(AppError::ClaudeRateLimited(ref msg)) => {
+                        Err(ref e)
+                            if matches!(
+                                e,
+                                AppError::ClaudeRateLimited(_) | AppError::ClaudeTransient(_)
+                            ) =>
+                        {
+                            let is_rate_limit =
+                                matches!(e, AppError::ClaudeRateLimited(_));
+                            let msg = e.to_string();
+
                             if !self.rate_limit.enabled
                                 || retries >= self.rate_limit.max_retries
                             {
                                 if retries > 0 {
                                     tracing::warn!(
                                         retries,
-                                        "Rate limited too many times, stopping agent"
+                                        error = %msg,
+                                        "Retried too many times, stopping agent"
                                     );
                                 } else {
-                                    tracing::warn!("Rate limited, retry disabled");
+                                    tracing::warn!(error = %msg, "Retry disabled");
                                 }
-                                return AgentOutcome::RateLimited {
-                                    message: msg.clone(),
+                                if is_rate_limit {
+                                    return AgentOutcome::RateLimited { message: msg };
+                                }
+                                return AgentOutcome::Failed {
+                                    error: format!("Claude API error: {msg}"),
                                 };
                             }
                             retries += 1;
                             let backoff = self.rate_limit.initial_backoff
                                 * 2u32.saturating_pow(retries - 1);
-                            tracing::info!(
+                            tracing::warn!(
                                 retry = retries,
                                 backoff_secs = backoff.as_secs(),
-                                "Rate limited, waiting before retry"
+                                error = %msg,
+                                "Transient error, waiting before retry"
                             );
                             tokio::time::sleep(backoff).await;
 
                             // Check cancellation during backoff
                             if is_cancelled().await {
-                                tracing::info!("Agent cancelled during rate limit backoff");
+                                tracing::info!("Agent cancelled during backoff");
                                 return AgentOutcome::Cancelled;
                             }
                         }
